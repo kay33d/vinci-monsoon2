@@ -1,0 +1,15 @@
+.git
+.gitignore
+tests/
+Makefile
+README.md
+requirements-dev.txt
+.env
+*.env
+__pycache__/
+*.pyc
+.pytest_cache/
+*.gguf
+models/
+out/
+scratch/

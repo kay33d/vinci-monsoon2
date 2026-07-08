@@ -1,0 +1,58 @@
+# =============================================================================
+# Routing configuration for the two-stage hybrid router.
+# Everything here is a POLICY KNOB — edit freely, no code changes needed.
+# =============================================================================
+
+# --- Category -> role -------------------------------------------------------
+# Each of the 8 capability categories maps to an abstract ROLE. Roles are
+# resolved to a concrete Fireworks model ID at runtime by matching substrings
+# against the ALLOWED_MODELS env var (see role_model_hints below).
+category_roles:
+  factual_knowledge: general
+  math_reasoning: reasoning
+  sentiment: general
+  summarization: general
+  ner: general
+  code_debugging: code
+  logical_reasoning: reasoning
+  code_generation: code
+
+# --- Role -> model substring hints ------------------------------------------
+# HINTS, NOT GUARANTEES. Matched case-insensitively, in order, against the
+# model IDs actually present in ALLOWED_MODELS at runtime. First hint that
+# matches an allowed model wins. If nothing matches, the resolver degrades
+# gracefully to the FIRST entry of ALLOWED_MODELS — we never invent an ID.
+# Update these on launch day once the real ALLOWED_MODELS list is published.
+role_model_hints:
+  reasoning: ["minimax", "kimi", "deepseek", "qwen3", "qwen"]
+  code: ["kimi", "minimax", "qwen3-coder", "qwen", "llama"]
+  general: ["gemma", "minimax", "llama", "qwen"]
+
+# --- Escalation policy per category -----------------------------------------
+# Decides when we trust the LOCAL model's answer (0 tokens) vs escalate to
+# Fireworks. Values:
+#   strict  -> local only if difficulty == shallow AND confidence == high
+#   lenient -> local whenever difficulty == shallow (low confidence tolerated)
+#   always  -> always escalate to Fireworks, never answer locally
+# Small local models are weak at multi-step math / logic / code, so those
+# categories stay "strict" (they escalate unless the classifier is sure the
+# task is trivial). Cheap classification-style categories are "lenient".
+escalation_policy:
+  default: strict
+  overrides:
+    math_reasoning: strict
+    logical_reasoning: strict
+    code_debugging: strict
+    code_generation: strict
+    factual_knowledge: lenient
+    sentiment: lenient
+    summarization: lenient
+    ner: lenient
+
+# --- Generation limits -------------------------------------------------------
+limits:
+  classify_max_tokens: 64      # stage-1 JSON is tiny; keep latency low
+  local_max_tokens: 300        # local answers cost 0 tokens but must beat 30s
+  remote_max_tokens: 512       # cap Fireworks output tokens (they score!)
+  remote_timeout_seconds: 25   # hard cap, stays under the 30s per-request rule
+  classify_prompt_chars: 1500  # truncate very long prompts for stage-1 only

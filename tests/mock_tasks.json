@@ -1,0 +1,14 @@
+[
+  { "task_id": "mock-01", "prompt": "What is the capital of Australia, and what body of water is it near?" },
+  { "task_id": "mock-02", "prompt": "Explain in two sentences how a refrigerator keeps food cold." },
+  { "task_id": "mock-03", "prompt": "A store has 240 items. It sells 15% on Monday and 60 more on Tuesday. How many items remain?" },
+  { "task_id": "mock-04", "prompt": "A car travels 180 km in 2.5 hours, then 90 km in 1 hour. What is its average speed for the whole trip?" },
+  { "task_id": "mock-05", "prompt": "Classify the sentiment of this review: The battery life is great, but the screen scratches too easily." },
+  { "task_id": "mock-06", "prompt": "Classify the sentiment of this comment and justify briefly: Absolutely loved the service, will come back every week!" },
+  { "task_id": "mock-07", "prompt": "Summarize the following in exactly one sentence: The new library opened downtown last month. It offers free coding classes, a maker space with 3D printers, and extended weekend hours, and early attendance figures suggest it is already the busiest branch in the city." },
+  { "task_id": "mock-08", "prompt": "Extract all named entities and their types from: Maria Sanchez joined Fireworks AI in Berlin last March." },
+  { "task_id": "mock-09", "prompt": "Extract all named entities and their types from: On 4 July 2024, Dr. Ahmed Khan of Oxford University presented in Tokyo." },
+  { "task_id": "mock-10", "prompt": "This function should return the max of a list but has a bug: def get_max(nums): return nums[0]. Find and fix it." },
+  { "task_id": "mock-11", "prompt": "Three friends, Sam, Jo, and Lee, each own a different pet: cat, dog, bird. Sam does not own the bird. Jo owns the dog. Who owns the cat?" },
+  { "task_id": "mock-12", "prompt": "Write a Python function that returns the second-largest number in a list, handling duplicates correctly." }
+]
