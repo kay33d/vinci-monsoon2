@@ -22,11 +22,13 @@ category_roles:
 # model IDs actually present in ALLOWED_MODELS at runtime. First hint that
 # matches an allowed model wins. If nothing matches, the resolver degrades
 # gracefully to the FIRST entry of ALLOWED_MODELS — we never invent an ID.
-# Update these on launch day once the real ALLOWED_MODELS list is published.
+# Set for the published Track 1 list: minimax-m3, kimi-k2p7-code,
+# gemma-4-31b-it, gemma-4-26b-a4b-it, gemma-4-31b-it-nvfp4.
+# Gemma variants are deliberately NOT hinted (on-demand, ~$7/hr idle).
 role_model_hints:
-  reasoning: ["minimax", "kimi", "deepseek", "qwen3", "qwen"]
-  code: ["kimi", "minimax", "qwen3-coder", "qwen", "llama"]
-  general: ["gemma", "minimax", "llama", "qwen"]
+  reasoning: ["minimax-m3"]
+  code: ["kimi-k2p7-code"]
+  general: ["minimax-m3"]
 
 # --- Escalation policy per category -----------------------------------------
 # Decides when we trust the LOCAL model's answer (0 tokens) vs escalate to
