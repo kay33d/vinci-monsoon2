@@ -14,7 +14,10 @@ category_roles:
   summarization: general
   ner: general
   code_debugging: code
-  logical_reasoning: reasoning
+  # logical_reasoning deliberately uses the CODE role (kimi-k2p7-code):
+  # minimax-m3's hidden reasoning burns the token budget on hard puzzles and
+  # returns empty content, which used to force a local fallback.
+  logical_reasoning: code
   code_generation: code
 
 # --- Role -> model substring hints ------------------------------------------
@@ -62,5 +65,5 @@ limits:
   # cap makes generation finish inside the window. Other roles keep 512.
   remote_max_tokens_by_role:
     reasoning: 400
-  remote_timeout_seconds: 28   # raised from 25; still under the 30s cap
+  remote_timeout_seconds: 25   # per-request; keeps clear margin under 30s cap
   classify_prompt_chars: 1500  # truncate very long prompts for stage-1 only

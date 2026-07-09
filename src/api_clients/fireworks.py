@@ -52,21 +52,50 @@ class FireworksClient:
             "Content-Type": "application/json",
         }
 
-        last_err: Exception | None = None
+        last_err: Exception | str | None = None
         for attempt in range(self.RETRIES + 1):
             try:
                 resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
-                resp.raise_for_status()
-                data = resp.json()
-                text = data["choices"][0]["message"]["content"].strip()
-                usage = data.get("usage", {})
-                self.total_tokens += usage.get("total_tokens", 0)
-                self.calls += 1
-                if not text:
-                    raise ValueError("empty completion")
-                return text
-            except Exception as exc:  # network, HTTP, schema — retry once
+            except requests.RequestException as exc:
+                # Network error / timeout: genuinely transient — retry once.
                 last_err = exc
                 if attempt < self.RETRIES:
-                    time.sleep(self.BACKOFF_SECONDS * (attempt + 1))
+                    time.sleep(self.BACKOFF_SECONDS)
+                continue
+
+            if resp.status_code == 429 or resp.status_code >= 500:
+                # Rate limit / server error: transient — retry once.
+                last_err = f"HTTP {resp.status_code}"
+                if attempt < self.RETRIES:
+                    time.sleep(self.BACKOFF_SECONDS)
+                continue
+            if resp.status_code >= 400:
+                # Auth / unknown model / bad request: permanent. Retrying
+                # would waste another full timeout — fail fast, caller
+                # falls back to the local model.
+                raise FireworksError(f"HTTP {resp.status_code} (permanent, not retried)")
+
+            try:
+                data = resp.json()
+                choice = data["choices"][0]
+                text = (choice["message"].get("content") or "").strip()
+                finish = choice.get("finish_reason")
+            except Exception as exc:
+                raise FireworksError(f"malformed response (not retried): {exc}")
+
+            # Tokens were consumed even if the answer is unusable — count them.
+            self.total_tokens += data.get("usage", {}).get("total_tokens", 0)
+
+            if not text or finish == "length":
+                # Hidden-reasoning models can burn the whole max_tokens budget
+                # and return empty/truncated content with finish_reason=length.
+                # A retry would just repeat it and waste another timeout —
+                # fail IMMEDIATELY so the caller falls back locally.
+                raise FireworksError(
+                    f"unusable completion (finish_reason={finish}, "
+                    f"empty={not text}) — not retried"
+                )
+
+            self.calls += 1
+            return text
         raise FireworksError(f"Fireworks call failed after retry: {last_err}")

@@ -28,9 +28,12 @@ from src.router.dispatch import Router                         # noqa: E402
 INPUT_PATH = os.environ.get("INPUT_PATH", "/input/tasks.json")
 OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "/output/results.json")
 
-# Leave a safety margin inside the 10-minute wall clock: once we cross this
-# many seconds we stop escalating and answer the remainder locally/fast.
-SOFT_DEADLINE_SECONDS = 540
+# Soft ceiling on total runtime, configurable via env. Once elapsed time
+# crosses it we STOP escalating to Fireworks and answer every remaining task
+# with the local model only: a possibly-weaker local answer always beats a
+# TIMEOUT, which zeros the whole submission. 510s leaves 90s of margin
+# inside the 10-minute hard cap.
+TIME_BUDGET_SECONDS = float(os.environ.get("TIME_BUDGET_SECONDS", "510"))
 
 
 def _fallback_answer(prompt: str, router: Router) -> str:
@@ -57,12 +60,19 @@ def main() -> int:
     router = Router(local_model, FireworksClient())
 
     results = []
+    budget_hit = False
     for task in tasks:
         task_id = task.get("task_id", "")
         prompt = task.get("prompt", "")
         try:
-            if time.time() - start > SOFT_DEADLINE_SECONDS:
-                # Out of budget: no more remote calls, just answer locally.
+            if time.time() - start > TIME_BUDGET_SECONDS:
+                if not budget_hit:
+                    budget_hit = True
+                    print(
+                        f"TIME BUDGET {TIME_BUDGET_SECONDS:.0f}s exceeded — "
+                        "answering all remaining tasks locally (no more API calls)",
+                        flush=True,
+                    )
                 answer, meta = _fallback_answer(prompt, router), {"route": "deadline_local"}
             else:
                 answer, meta = router.route(prompt)
