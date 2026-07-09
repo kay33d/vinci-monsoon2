@@ -73,7 +73,15 @@ jobs:
 
       - name: Report compressed image size
         run: |
-          SIZE_BYTES=$(docker manifest inspect ghcr.io/jubayeronrob/vinci-monsoon:latest \
-            | jq '[.layers[].size] | add')
+          IMG=ghcr.io/jubayeronrob/vinci-monsoon:latest
+          RAW=$(docker buildx imagetools inspect --raw "$IMG")
+          # buildx pushes an OCI image index; drill into the linux/amd64
+          # manifest to sum its layer sizes. Handle a bare manifest too.
+          if echo "$RAW" | jq -e '.layers' >/dev/null; then
+            SIZE_BYTES=$(echo "$RAW" | jq '[.layers[].size] | add')
+          else
+            DIGEST=$(echo "$RAW" | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest' | head -1)
+            SIZE_BYTES=$(docker buildx imagetools inspect --raw "$IMG@$DIGEST" | jq '[.layers[].size] | add')
+          fi
           echo "Compressed image size: $(numfmt --to=iec "$SIZE_BYTES") ($SIZE_BYTES bytes)"
           echo "Hackathon cap: 10GB compressed"
