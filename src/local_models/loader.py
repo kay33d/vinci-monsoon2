@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from typing import Optional
 
 from config.prompts import CLASSIFY_SYSTEM, INTENTS, LOCAL_ANSWER_SYSTEM
@@ -42,6 +43,14 @@ class LocalModel:
         self._llm = None
         self._grammar = None
         self.backend = "heuristic"
+        # llama-cpp-python's Llama object is not safe to call concurrently
+        # from multiple threads on the same instance — the entrypoint's
+        # per-task timeout abandons slow calls (leaves their thread running)
+        # rather than killing them, so a later task can otherwise end up
+        # calling into this same model while an abandoned call is still
+        # in flight. That concurrent access segfaults the process. Every
+        # call into self._llm is serialized through this lock instead.
+        self._lock = threading.Lock()
         self._try_load_llama()
 
     def _try_load_llama(self) -> None:
@@ -78,15 +87,16 @@ class LocalModel:
         """Return {"intent","difficulty","confidence"} — always valid."""
         if self._llm is not None:
             try:
-                out = self._llm.create_chat_completion(
-                    messages=[
-                        {"role": "system", "content": CLASSIFY_SYSTEM},
-                        {"role": "user", "content": task_prompt},
-                    ],
-                    max_tokens=max_tokens,
-                    temperature=0.0,
-                    grammar=self._grammar,
-                )
+                with self._lock:
+                    out = self._llm.create_chat_completion(
+                        messages=[
+                            {"role": "system", "content": CLASSIFY_SYSTEM},
+                            {"role": "user", "content": task_prompt},
+                        ],
+                        max_tokens=max_tokens,
+                        temperature=0.0,
+                        grammar=self._grammar,
+                    )
                 decision = json.loads(out["choices"][0]["message"]["content"])
                 return self._validate(decision)
             except Exception:
@@ -110,14 +120,15 @@ class LocalModel:
     def generate(self, task_prompt: str, max_tokens: int = 300) -> str:
         if self._llm is not None:
             try:
-                out = self._llm.create_chat_completion(
-                    messages=[
-                        {"role": "system", "content": LOCAL_ANSWER_SYSTEM},
-                        {"role": "user", "content": task_prompt},
-                    ],
-                    max_tokens=max_tokens,
-                    temperature=0.2,
-                )
+                with self._lock:
+                    out = self._llm.create_chat_completion(
+                        messages=[
+                            {"role": "system", "content": LOCAL_ANSWER_SYSTEM},
+                            {"role": "user", "content": task_prompt},
+                        ],
+                        max_tokens=max_tokens,
+                        temperature=0.2,
+                    )
                 text = out["choices"][0]["message"]["content"].strip()
                 if text:
                     return text
