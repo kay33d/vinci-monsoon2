@@ -17,7 +17,6 @@ import os
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 
 # Make repo-root imports work no matter where the script is launched from.
@@ -41,12 +40,19 @@ TIME_BUDGET_SECONDS = float(os.environ.get("TIME_BUDGET_SECONDS", "420"))
 # the GIL during inference, so this thread keeps ticking even while a local
 # model call is stuck/slow on a weak grading CPU. 540s leaves 60s of margin
 # inside the 10-minute (600s) hard cap for process teardown/exit.
+#
+# There is deliberately NO per-task timeout/abandonment here. An earlier
+# version wrapped each task in a thread with its own timeout and abandoned
+# slow calls to keep the loop moving — but abandoning a call into the
+# (lock-protected, single-instance) local model just leaves that lock held
+# by a still-running background call. Every subsequent task's classify()
+# call (every task classifies locally first, even Fireworks-bound ones)
+# then blocks on that same lock, times out too, and cascades into a stub
+# non-answer for the rest of the run. Both call sites are already bounded
+# without per-task interruption: Fireworks calls carry their own HTTP
+# timeout, and local calls are capped by max_tokens. Only the watchdog
+# below is needed to bound total runtime.
 HARD_DEADLINE_SECONDS = float(os.environ.get("HARD_DEADLINE_SECONDS", "540"))
-
-# Per-task ceiling so one slow local-model call (classify + generate, no
-# built-in timeout of its own) can never eat the whole remaining budget or
-# blow the 30s per-request cap. Comfortably under 30s.
-PER_TASK_TIMEOUT_SECONDS = float(os.environ.get("PER_TASK_TIMEOUT_SECONDS", "27"))
 
 _write_lock = threading.Lock()
 _written = threading.Event()
@@ -58,12 +64,6 @@ def _fallback_answer(prompt: str, router: Router) -> str:
         return router._local_answer(prompt)
     except Exception:
         return "Unable to produce an answer for this task."
-
-
-def _quick_answer(prompt: str) -> str:
-    """Near-instant answer for when even the local model is too slow to trust."""
-    head = " ".join(prompt.split())[:160]
-    return f"Best-effort response (time budget exceeded) to: {head}"
 
 
 def _write_results(results: list, path: str) -> None:
@@ -131,8 +131,6 @@ def main() -> int:
     _start_watchdog(start, results, all_task_ids, OUTPUT_PATH)
 
     budget_hit = False
-    # A stuck task's thread is abandoned (not joined) on timeout so it never
-    # blocks the next task; each task gets its own single-worker pool.
     for task in tasks:
         task_id = task.get("task_id", "")
         prompt = task.get("prompt", "")
@@ -145,30 +143,9 @@ def main() -> int:
                         "answering all remaining tasks locally (no more API calls)",
                         flush=True,
                     )
-                target, args = _fallback_answer, (prompt, router)
-                meta = {"route": "deadline_local"}
+                answer, meta = _fallback_answer(prompt, router), {"route": "deadline_local"}
             else:
-                target, args = router.route, (prompt,)
-                meta = None
-
-            remaining_hard = HARD_DEADLINE_SECONDS - (time.time() - start)
-            per_task_timeout = max(1.0, min(PER_TASK_TIMEOUT_SECONDS, remaining_hard))
-            # Not a context manager: pool.__exit__ would block on shutdown()
-            # waiting for a stuck worker thread, defeating the timeout below.
-            # shutdown(wait=False) lets a timed-out call keep running in the
-            # background (abandoned, never joined) while we move on.
-            pool = ThreadPoolExecutor(max_workers=1)
-            future = pool.submit(target, *args)
-            try:
-                if meta is None:
-                    answer, meta = future.result(timeout=per_task_timeout)
-                else:
-                    answer = future.result(timeout=per_task_timeout)
-            except FutureTimeoutError:
-                answer = _quick_answer(prompt)
-                meta = {"route": "task_timeout", "decision": {}}
-            finally:
-                pool.shutdown(wait=False)
+                answer, meta = router.route(prompt)
         except Exception as exc:  # one bad task must never sink the run
             answer, meta = _fallback_answer(prompt, router), {"route": "error", "error": str(exc)}
         if not isinstance(answer, str) or not answer.strip():
@@ -198,12 +175,9 @@ def main() -> int:
         f"fireworks calls={router.fireworks.calls} tokens={router.fireworks.total_tokens}",
         flush=True,
     )
-    # Any per-task timeout leaves an orphaned, non-daemon executor thread
-    # still running in the background. concurrent.futures registers an
-    # atexit hook that JOINS such threads before the interpreter can exit,
-    # which would silently reintroduce the exact hang this file exists to
-    # prevent. os._exit() bypasses atexit/thread-joining entirely — results
-    # are already durably written to disk by this point.
+    # os._exit() skips normal interpreter teardown (atexit hooks, thread
+    # joins) for a fast, unconditional exit — results are already durably
+    # written to disk by this point, so there is nothing left to clean up.
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)
