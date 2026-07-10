@@ -50,10 +50,17 @@ class LocalModel:
         try:
             from llama_cpp import Llama, LlamaGrammar
 
+            # Defaults are deliberately conservative: the grading VM is
+            # 4GB RAM / 2 vCPU. A cgroup OOM kill is SIGKILL — it cannot be
+            # caught by the except below, so the only real defense is
+            # keeping actual memory use (weights + KV cache + compute
+            # buffers) well under the cap rather than relying on graceful
+            # fallback after the fact.
             self._llm = Llama(
                 model_path=self.model_path,
-                n_ctx=4096,
-                n_threads=os.cpu_count() or 2,
+                n_ctx=int(os.environ.get("LOCAL_MODEL_N_CTX", "2048")),
+                n_threads=int(os.environ.get("LOCAL_MODEL_N_THREADS", "2")),
+                n_batch=int(os.environ.get("LOCAL_MODEL_N_BATCH", "256")),
                 n_gpu_layers=0,  # grading VM is CPU-only
                 verbose=False,
             )
