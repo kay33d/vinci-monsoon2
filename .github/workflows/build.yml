@@ -28,7 +28,10 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name == 'push'
+    # 'push' is the normal trigger; workflow_dispatch also allowed as a
+    # manual fallback since automated pushes from some actors don't always
+    # fire the push event that GitHub Actions listens for.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
