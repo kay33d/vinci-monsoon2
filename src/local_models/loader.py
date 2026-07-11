@@ -43,6 +43,7 @@ class LocalModel:
         self._llm = None
         self._grammar = None
         self.backend = "heuristic"
+        self.classifier_backend = "heuristic"
         # llama-cpp-python's Llama object is not safe to call concurrently
         # from multiple threads on the same instance — the entrypoint's
         # per-task timeout abandons slow calls (leaves their thread running)
@@ -51,7 +52,26 @@ class LocalModel:
         # in flight. That concurrent access segfaults the process. Every
         # call into self._llm is serialized through this lock instead.
         self._lock = threading.Lock()
+        self._router = self._try_load_router()
         self._try_load_llama()
+        if self._router is not None:
+            self.classifier_backend = "deberta-router"
+        elif self._llm is not None:
+            self.classifier_backend = "llama.cpp"
+
+    @staticmethod
+    def _try_load_router():
+        """Stage-1 classifier: the baked DeBERTa router (see
+        router_classifier.py). Any load failure degrades to the older
+        classify paths — a running agent with weaker routing beats a
+        crashed container."""
+        try:
+            from src.local_models.router_classifier import RouterClassifier
+            return RouterClassifier()
+        except Exception as exc:
+            print(f"router classifier unavailable ({exc}); "
+                  "falling back to llama.cpp/heuristic classify", flush=True)
+            return None
 
     def _try_load_llama(self) -> None:
         if not os.path.isfile(self.model_path):
@@ -84,7 +104,18 @@ class LocalModel:
     # Stage 1: classification                                            #
     # ------------------------------------------------------------------ #
     def classify(self, task_prompt: str, max_tokens: int = 64) -> dict:
-        """Return {"intent","difficulty","confidence"} — always valid."""
+        """Return {"intent","difficulty","confidence"} — always valid.
+
+        Preference order: DeBERTa router (fast, dedicated classifier) ->
+        llama.cpp GBNF decoding -> keyword heuristic. The router returns a
+        FLOAT confidence (softmax prob of the predicted intent); the older
+        paths return categorical "high"/"low" — dispatch handles both.
+        """
+        if self._router is not None:
+            try:
+                return self._validate(self._router.classify(task_prompt))
+            except Exception:
+                pass
         if self._llm is not None:
             try:
                 with self._lock:
@@ -105,11 +136,17 @@ class LocalModel:
 
     @staticmethod
     def _validate(decision: dict) -> dict:
-        """Belt-and-braces: the grammar guarantees shape, but never trust IO."""
+        """Belt-and-braces: never trust IO. Confidence may be categorical
+        ("high"/"low", from the LLM/heuristic paths) or a float in [0,1]
+        (from the DeBERTa router)."""
+        conf = decision.get("confidence")
+        conf_ok = conf in ("high", "low") or (
+            isinstance(conf, (int, float)) and 0.0 <= conf <= 1.0
+        )
         if (
             decision.get("intent") in INTENTS
             and decision.get("difficulty") in ("shallow", "deep")
-            and decision.get("confidence") in ("high", "low")
+            and conf_ok
         ):
             return decision
         return dict(_DEFAULT_DECISION)

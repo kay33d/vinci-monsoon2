@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -26,9 +27,17 @@ from src.router.classifier import classify_task
 
 _CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "routing_map.yaml"
 
-# The stage-1 classifier emits categorical confidence; map it to a score so
-# the config threshold (local_confidence_threshold) can gate it numerically.
+# The LLM/heuristic classify paths emit categorical confidence; map it to a
+# score so the config threshold (local_confidence_threshold) can gate it
+# numerically. The DeBERTa router path emits a float directly (softmax prob
+# of the predicted intent), which feeds the same gate untranslated.
 _CONFIDENCE_SCORE = {"high": 0.95, "low": 0.50}
+
+
+def _confidence_value(raw) -> float:
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    return _CONFIDENCE_SCORE.get(raw, 0.0)
 
 # --- Aggressive escalation cues (checked BEFORE accepting a local answer) ---
 # Code syntax / language names
@@ -121,9 +130,10 @@ class Router:
             return False
         if decision["difficulty"] != "shallow":
             return False
-        # Confidence gate: categorical confidence maps to a score which must
-        # EXCEED the config threshold (default 0.90) to stay local.
-        conf = _CONFIDENCE_SCORE.get(decision.get("confidence"), 0.0)
+        # Confidence gate: the score (float from the router, or mapped from
+        # the categorical LLM/heuristic labels) must EXCEED the config
+        # threshold (default 0.90) to stay local.
+        conf = _confidence_value(decision.get("confidence"))
         if conf <= self.thresholds.get("local_confidence_threshold", 0.90):
             return False
         # Aggressive cue check runs LAST, before accepting a local answer.
@@ -137,6 +147,7 @@ class Router:
     # ------------------------------------------------------------------ #
     def route(self, task_prompt: str) -> tuple[str, dict]:
         """Return (answer, meta). meta records how the task was routed."""
+        classify_start = time.time()
         decision = classify_task(
             task_prompt, self.local,
             max_chars=self.limits.get("classify_prompt_chars", 1500),
@@ -147,6 +158,7 @@ class Router:
             "decision": decision, "route": "local", "model": "local",
             "finish_reason": "-", "truncated": False,
             "escalation_cue": self.aggressive_override(task_prompt) or "-",
+            "classify_ms": round((time.time() - classify_start) * 1000, 1),
         }
 
         if self.should_answer_locally(decision, task_prompt):

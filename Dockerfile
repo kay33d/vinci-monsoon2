@@ -29,6 +29,24 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 ARG MODEL_URL="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
 RUN mkdir -p /models && curl -L --fail --retry 3 -o /models/model.gguf "$MODEL_URL"
 
+# ---- Stage-1 classifier: DeBERTa router (torch CPU — never pull the CUDA
+# wheel from PyPI; it alone would blow past the image budget) ---------------
+RUN pip install --no-cache-dir --prefix=/install \
+        torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir --prefix=/install \
+        "transformers>=4.40" "huggingface_hub>=0.23" sentencepiece safetensors
+
+# Bake the classifier snapshot into the image and VALIDATE it at build time:
+# scripts/bake_router_model.py downloads the repo, makes it offline-loadable
+# (backbone config saved locally), loads the weights through the exact
+# runtime code path, and runs the 8-category smoke evaluation — the build
+# fails below the 68% routing-accuracy target, so a bad snapshot never ships.
+ARG ROUTER_MODEL_ID="xubayer/prompt-router-deberta-v3-xsmall"
+COPY scripts/bake_router_model.py /tmp/bake/bake_router_model.py
+COPY src/local_models/router_classifier.py /tmp/bake/router_classifier.py
+RUN PYTHONPATH=/install/lib/python3.11/site-packages:/tmp/bake \
+    python /tmp/bake/bake_router_model.py --model-id "$ROUTER_MODEL_ID" --out /models/router
+
 # ---------- Stage 2: slim runtime -------------------------------------------
 FROM python:3.11-slim
 
@@ -45,6 +63,9 @@ COPY config ./config
 COPY entrypoint.py .
 
 ENV LOCAL_MODEL_PATH=/models/model.gguf \
+    ROUTER_MODEL_PATH=/models/router \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 

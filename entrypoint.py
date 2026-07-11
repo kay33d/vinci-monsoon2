@@ -122,6 +122,7 @@ def main() -> int:
 
     local_model = get_local_model()
     print(f"local model backend: {local_model.backend}", flush=True)
+    print(f"classifier backend: {getattr(local_model, 'classifier_backend', '?')}", flush=True)
     router = Router(local_model, FireworksClient())
     # Resolved role -> model map (from runtime ALLOWED_MODELS, never hardcoded)
     print(f"resolved model map: {router.resolved_map()}", flush=True)
@@ -159,7 +160,8 @@ def main() -> int:
             f"DIAG {task_id} | {cat} | {meta.get('route')} | "
             f"{meta.get('model', '-')} | finish={meta.get('finish_reason', '-')} | "
             f"answer_len={len(answer)} | "
-            f"truncated={'yes' if meta.get('truncated') else 'no'}",
+            f"truncated={'yes' if meta.get('truncated') else 'no'} | "
+            f"classify_ms={meta.get('classify_ms', '-')}",
             file=sys.stderr, flush=True,
         )
 
